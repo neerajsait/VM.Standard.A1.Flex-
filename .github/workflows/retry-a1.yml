@@ -16,7 +16,13 @@ jobs:
           mkdir -p ~/.oci
           echo "${{ secrets.OCI_CONFIG }}" > ~/.oci/config
           echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/key.pem
-          chmod 600 ~/.oci/key.pem
+          chmod 600 ~/.oci/config ~/.oci/key.pem
+          export OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
+          echo "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" >> "$GITHUB_ENV"
+
+      - name: Write SSH key
+        run: |
+          echo "${{ secrets.OCI_SSH_PUBKEY }}" > ~/.ssh_pubkey.pub
 
       - name: Attempt launch
         id: launch
@@ -29,7 +35,8 @@ jobs:
             --image-id "${{ secrets.OCI_IMAGE }}" \
             --subnet-id "${{ secrets.OCI_SUBNET }}" \
             --assign-public-ip true \
-            --ssh-authorized-keys-file <(echo "${{ secrets.OCI_SSH_PUBKEY }}") 2>&1) || true
+            --ssh-authorized-keys-file ~/.ssh_pubkey.pub \
+            --debug 2>&1) || true
           echo "$OUT"
 
           if echo "$OUT" | grep -q '"id"'; then
