@@ -1,0 +1,68 @@
+name: Retry A1 Instance
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  try-launch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install OCI CLI
+        run: pip install oci-cli
+
+      - name: Configure OCI
+        run: |
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_CONFIG }}" > ~/.oci/config
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+
+      - name: Attempt launch
+        id: launch
+        run: |
+          OUT=$(oci compute instance launch \
+            --availability-domain "IOCQ:AP-HYDERABAD-1-AD-1" \
+            --compartment-id "${{ secrets.OCI_COMPARTMENT }}" \
+            --shape "VM.Standard.A1.Flex" \
+            --shape-config '{"ocpus":2,"memoryInGBs":12}' \
+            --image-id "${{ secrets.OCI_IMAGE }}" \
+            --subnet-id "${{ secrets.OCI_SUBNET }}" \
+            --assign-public-ip true \
+            --ssh-authorized-keys-file <(echo "${{ secrets.OCI_SSH_PUBKEY }}") 2>&1) || true
+          echo "$OUT"
+
+          if echo "$OUT" | grep -q '"id"'; then
+            ID=$(echo "$OUT" | grep -o '"id": *"[^"]*"' | head -1 | cut -d'"' -f4)
+            echo "instance_id=$ID" >> "$GITHUB_OUTPUT"
+            echo "launched=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "launched=false" >> "$GITHUB_OUTPUT"
+            echo "No capacity this run"
+          fi
+
+      - name: Wait for VNIC attachment
+        if: steps.launch.outputs.launched == 'true'
+        run: sleep 25
+
+      - name: Get instance IP
+        if: steps.launch.outputs.launched == 'true'
+        id: getip
+        run: |
+          IP=$(oci compute instance list-vnics \
+            --instance-id "${{ steps.launch.outputs.instance_id }}" \
+            --query 'data[0]."public-ip"' --raw-output)
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
+
+      - name: Email notification
+        if: steps.launch.outputs.launched == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: "A1 Instance Allocated"
+          to: 2200030957@kluniversity.in
+          from: OCI Watcher
+          body: "Your VM.Standard.A1.Flex instance is live. Instance ID: ${{ steps.launch.outputs.instance_id }}, IP: ${{ steps.getip.outputs.ip }}"
